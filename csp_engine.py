@@ -142,3 +142,71 @@ class DisasterReliefCSP:
                 )
                 return False
         return True
+
+    
+    def _revise(
+        self,
+        area_a: str,
+        area_b: str,
+        domains: Dict[str, List[str]],
+        assignments: Dict[str, str],
+    ) -> bool:
+        if area_a in assignments:
+            return False
+        revised = False
+        original_domain = list(domains[area_a])
+        filtered_domain: List[str] = []
+
+        for candidate in original_domain:
+            if not self._has_capacity_available(area_a, candidate):
+                continue
+            has_support = any(
+                self._is_pairwise_consistent(area_a, candidate, area_b, other_candidate)
+                for other_candidate in domains[area_b]
+            )
+            if has_support:
+                filtered_domain.append(candidate)
+                continue
+            revised = True
+            self.steps.append(
+                SolverStep(
+                    action="prune",
+                    variable=area_a,
+                    choice=candidate,
+                    detail=f"AC-3 pruned {candidate} from {area_a}: no support from {area_b}.",
+                )
+            )
+
+        if filtered_domain != original_domain:
+            domains[area_a] = filtered_domain
+        return revised
+
+    def _enforce_arc_consistency(
+        self,
+        domains: Dict[str, List[str]],
+        assignments: Dict[str, str],
+    ) -> bool:
+        queue: Deque[Tuple[str, str]] = deque(
+            (area_a, area_b)
+            for area_a, neighbors in self.neighbors.items()
+            for area_b in neighbors
+            if area_a != area_b
+        )
+
+        while queue:
+            area_a, area_b = queue.popleft()
+            if self._revise(area_a, area_b, domains, assignments):
+                if not domains[area_a]:
+                    self.steps.append(
+                        SolverStep(
+                            action="dead_end",
+                            variable=area_a,
+                            choice=None,
+                            detail=f"Arc consistency emptied the domain for {area_a}.",
+                        )
+                    )
+                    return False
+                for area_c in self.neighbors[area_a]:
+                    if area_c != area_b:
+                        queue.append((area_c, area_a))
+        return True
