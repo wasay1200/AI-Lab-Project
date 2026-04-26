@@ -116,33 +116,43 @@ def main() -> None:
     st.write("Constraint Satisfaction Problem solver with visual assignment and backtracking steps.")
 
     scenarios = build_demo_scenarios()
+
+    if "resources_data" not in st.session_state:
+        st.session_state["resources_data"] = scenarios["Balanced Demo"][0].copy()
+    if "needs_data" not in st.session_state:
+        st.session_state["needs_data"] = scenarios["Balanced Demo"][1].copy()
+    if "scenario_version" not in st.session_state:
+        st.session_state["scenario_version"] = 0
+
     controls_col, _ = st.columns([2, 5])
     with controls_col:
         selected_scenario = st.selectbox("Quick Scenario", options=list(scenarios.keys()))
         if st.button("Load Scenario", use_container_width=True):
-            st.session_state["resources_table"] = scenarios[selected_scenario][0].copy()
-            st.session_state["needs_table"] = scenarios[selected_scenario][1].copy()
+            st.session_state["resources_data"] = scenarios[selected_scenario][0].copy()
+            st.session_state["needs_data"] = scenarios[selected_scenario][1].copy()
+            st.session_state["scenario_version"] += 1
+            st.rerun()
 
-    default_resources, default_needs = scenarios["Balanced Demo"]
+    version = st.session_state["scenario_version"]
 
     left, right = st.columns(2)
 
     with left:
         st.subheader("Resources")
         resources_df = st.data_editor(
-            default_resources,
+            st.session_state["resources_data"],
             num_rows="dynamic",
             use_container_width=True,
-            key="resources_table",
+            key=f"resources_table_{version}",
         )
 
     with right:
         st.subheader("Area Needs")
         needs_df = st.data_editor(
-            default_needs,
+            st.session_state["needs_data"],
             num_rows="dynamic",
             use_container_width=True,
-            key="needs_table",
+            key=f"needs_table_{version}",
         )
 
     if st.button("Run CSP Allocation", type="primary", use_container_width=True):
