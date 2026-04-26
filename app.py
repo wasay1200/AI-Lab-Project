@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import List, Set
+from collections import defaultdict
+from typing import Dict, List, Set, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -71,6 +72,82 @@ def to_step_table(steps) -> pd.DataFrame:
             for step in steps
         ]
     )
+
+
+def diagnose_failure(
+    solver: DisasterReliefCSP,
+    needs: List[AreaNeed],
+    resources: List[Resource],
+) -> Tuple[List[str], List[Dict[str, str]]]:
+    headline_reasons: List[str] = []
+    per_area_rows: List[Dict[str, str]] = []
+
+    demand_by_requirement: Dict[Tuple[str, str], int] = defaultdict(int)
+    for need in needs:
+        key = (need.required_type, need.required_skill or "")
+        demand_by_requirement[key] += need.required_units
+
+    for (req_type, req_skill), demanded in demand_by_requirement.items():
+        matching = [
+            resource
+            for resource in resources
+            if resource.resource_type == req_type
+            and (not req_skill or req_skill in resource.skills)
+        ]
+        total_capacity = sum(resource.capacity for resource in matching)
+        if total_capacity < demanded:
+            skill_part = f" with skill '{req_skill}'" if req_skill else ""
+            headline_reasons.append(
+                f"Capacity shortfall: type '{req_type}'{skill_part} has total capacity "
+                f"{total_capacity}, but combined demand is {demanded} units."
+            )
+
+    empty_areas = [area for area, domain in solver.domains.items() if not domain]
+    for area in empty_areas:
+        need = solver.need_lookup[area]
+        type_matches = [r for r in resources if r.resource_type == need.required_type]
+
+        if not type_matches:
+            per_area_rows.append(
+                {
+                    "area": area,
+                    "blocked_by": "type",
+                    "detail": f"No resource of type '{need.required_type}' exists.",
+                }
+            )
+            continue
+
+        for resource in type_matches:
+            if area in resource.inaccessible_areas:
+                reason = f"{resource.name} cannot reach {area} (inaccessible)."
+                blocked_by = "accessibility"
+            elif need.required_skill and need.required_skill not in resource.skills:
+                reason = f"{resource.name} lacks required skill '{need.required_skill}'."
+                blocked_by = "skill"
+            elif resource.capacity < need.required_units:
+                reason = (
+                    f"{resource.name} capacity {resource.capacity} < required "
+                    f"{need.required_units} units."
+                )
+                blocked_by = "capacity"
+            else:
+                reason = (
+                    f"{resource.name} pruned during propagation "
+                    f"(capacity contention with another area)."
+                )
+                blocked_by = "contention"
+            per_area_rows.append(
+                {"area": area, "blocked_by": blocked_by, "detail": reason}
+            )
+
+    if not headline_reasons and not per_area_rows:
+        headline_reasons.append(
+            "Per-area constraints are individually satisfiable, but no joint assignment "
+            "respects all pairwise capacity constraints. Increase a resource's capacity "
+            "or add another matching resource."
+        )
+
+    return headline_reasons, per_area_rows
 
 
 def build_demo_scenarios() -> dict:
@@ -184,7 +261,27 @@ def main() -> None:
             st.subheader("Final Allocation")
             st.dataframe(assignment_table, use_container_width=True)
         else:
-            st.error("No valid allocation found with current constraints.")
+            st.error("No valid allocation found. The constraints below blocked it:")
+            headline_reasons, per_area_rows = diagnose_failure(solver, needs, resources)
+
+            for reason in headline_reasons:
+                st.warning(reason)
+
+            if per_area_rows:
+                st.subheader("Blocked Areas")
+                blocked_df = pd.DataFrame(per_area_rows)
+                st.dataframe(blocked_df, use_container_width=True)
+
+            dead_end_steps = [step for step in steps if step.action == "dead_end"]
+            if dead_end_steps:
+                with st.expander("Solver dead-end events"):
+                    dead_end_df = pd.DataFrame(
+                        [
+                            {"area": step.variable, "detail": step.detail}
+                            for step in dead_end_steps
+                        ]
+                    )
+                    st.dataframe(dead_end_df, use_container_width=True)
 
         step_table = to_step_table(steps)
         action_counts = step_table["action"].value_counts().rename_axis("action").reset_index(name="count")
@@ -208,27 +305,6 @@ def main() -> None:
         st.subheader("Allocation JSON")
         allocation_json = json.dumps(assignment, indent=2)
         st.code(allocation_json, language="json")
-
-        export_payload = {
-            "solved": solved,
-            "allocation": assignment,
-            "domains": domain_data,
-            "steps": step_table.to_dict(orient="records"),
-        }
-        st.download_button(
-            label="Download Run Report (JSON)",
-            data=json.dumps(export_payload, indent=2),
-            file_name="disaster_relief_csp_report.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-        st.download_button(
-            label="Download Solver Steps (CSV)",
-            data=step_table.to_csv(index=False),
-            file_name="disaster_relief_solver_steps.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
 
 
 if __name__ == "__main__":
