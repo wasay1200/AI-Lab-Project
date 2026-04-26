@@ -210,3 +210,66 @@ class DisasterReliefCSP:
                     if area_c != area_b:
                         queue.append((area_c, area_a))
         return True
+
+    def _backtrack(self, assignments: Dict[str, str], domains: Dict[str, List[str]]) -> bool:
+        self.domains = domains
+        next_area = self._select_unassigned_area(assignments)
+        if next_area is None:
+            return True
+
+        domain = list(domains[next_area])
+        if not domain:
+            self.steps.append(
+                SolverStep(
+                    action="dead_end",
+                    variable=next_area,
+                    choice=None,
+                    detail=f"No valid resources exist in domain for {next_area}.",
+                )
+            )
+            return False
+
+        for resource_name in domain:
+            is_valid, detail = self._is_consistent(next_area, resource_name)
+            if not is_valid:
+                self.steps.append(
+                    SolverStep(
+                        action="reject",
+                        variable=next_area,
+                        choice=resource_name,
+                        detail=detail,
+                    )
+                )
+                continue
+
+            assignments[next_area] = resource_name
+            self.usage[resource_name] += self.need_lookup[next_area].required_units
+            self.steps.append(
+                SolverStep(
+                    action="assign",
+                    variable=next_area,
+                    choice=resource_name,
+                    detail=f"Assigned {resource_name} to {next_area}.",
+                )
+            )
+
+            next_domains = {area: list(values) for area, values in domains.items()}
+            next_domains[next_area] = [resource_name]
+
+            if self._forward_check(next_area, next_domains, assignments) and self._enforce_arc_consistency(
+                next_domains, assignments
+            ) and self._backtrack(assignments, next_domains):
+                return True
+
+            self.steps.append(
+                SolverStep(
+                    action="backtrack",
+                    variable=next_area,
+                    choice=resource_name,
+                    detail=f"Backtracked from {next_area} -> {resource_name}.",
+                )
+            )
+            self.usage[resource_name] -= self.need_lookup[next_area].required_units
+            del assignments[next_area]
+
+        return False
